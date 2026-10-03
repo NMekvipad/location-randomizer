@@ -24,3 +24,6 @@
 - Simple web app with a drop down to select mode
 - An input boxes for inputting parameters that is different between mode
 - Output a single randomly selected coordinate (if possible output google map link to that latitude and longtitude)
+
+# Tool url
+[Location randomizer](https://nmekvipad.github.io/location-randomizer/) 
