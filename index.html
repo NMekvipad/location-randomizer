@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Location randomizer</title>
+<style>
+  :root {
+    --bg: #eef2ef; --panel: #fff; --ink: #15231f; --muted: #5a6b65;
+    --line: #c9d5cf; --accent: #0f6b5c; --accent-ink: #fff; --err: #a3262a;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #101a17; --panel: #172420; --ink: #e6eeea; --muted: #93a59d;
+            --line: #2c3f38; --accent: #4fc3a8; --accent-ink: #08201a; --err: #ff8a8d; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: start center; padding: 2.5rem 1rem;
+    background: var(--bg); color: var(--ink);
+    font: 16px/1.5 "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  }
+  main { width: 100%; max-width: 30rem; }
+  h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .25rem; letter-spacing: -.01em; }
+  .sub { margin: 0 0 1.5rem; color: var(--muted); }
+  form { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1.25rem; }
+  label { display: block; font-weight: 600; margin: 0 0 .25rem; }
+  .field { margin-bottom: 1rem; }
+  .hint { display: block; font-size: .85rem; color: var(--muted); margin-top: .2rem; }
+  input, select {
+    width: 100%; padding: .6rem .7rem; font: inherit; color: inherit;
+    background: transparent; border: 1px solid var(--line); border-radius: 6px;
+  }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+  button {
+    width: 100%; padding: .7rem; font: inherit; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 6px;
+  }
+  [hidden] { display: none !important; }
+  #error { color: var(--err); margin: 1rem 0 0; }
+  #result { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
+  #coords { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em; overflow-wrap: anywhere; }
+  .actions { display: flex; gap: .75rem; margin-top: .75rem; flex-wrap: wrap; }
+  .actions a, .actions button {
+    width: auto; padding: .5rem .9rem; border-radius: 6px; font-weight: 600; text-decoration: none;
+    border: 1px solid var(--accent); color: var(--accent); background: transparent;
+  }
+  .actions a { background: var(--accent); color: var(--accent-ink); }
+  @media (prefers-reduced-motion: no-preference) {
+    #result:not([hidden]) { animation: pop .25s ease-out; }
+    @keyframes pop { from { opacity: 0; transform: translateY(4px); } }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Location randomizer</h1>
+  <p class="sub">Pick a random spot inside a circle or a rectangle on the map.</p>
+
+  <form id="form">
+    <div class="field">
+      <label for="mode">Mode</label>
+      <select id="mode">
+        <option value="radius">Radius: circle around a point</option>
+        <option value="grid">Grid: rectangle between two corners</option>
+      </select>
+    </div>
+
+    <div id="radius-fields">
+      <div class="field">
+        <label for="center">Starting point</label>
+        <input id="center" placeholder="55.6761, 12.5683" autocomplete="off">
+        <span class="hint">Right-click a spot in Google Maps and click the coordinates to copy them.</span>
+      </div>
+      <div class="field">
+        <label for="radius">Radius (km)</label>
+        <input id="radius" type="number" min="0" step="any" placeholder="2.5">
+      </div>
+    </div>
+
+    <div id="grid-fields" hidden>
+      <div class="field">
+        <label for="ul">Upper-left corner</label>
+        <input id="ul" placeholder="55.6900, 12.5400" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="lr">Lower-right corner</label>
+        <input id="lr" placeholder="55.6600, 12.6000" autocomplete="off">
+      </div>
+    </div>
+
+    <button id="go" type="submit">Pick a location</button>
+    <p id="error" role="alert" hidden></p>
+
+    <div id="result" hidden aria-live="polite">
+      <div id="coords"></div>
+      <div class="actions">
+        <a id="link" href="#" target="_blank" rel="noopener">Open in Google Maps</a>
+        <button type="button" id="copy">Copy coordinates</button>
+      </div>
+    </div>
+  </form>
+</main>
+
+<script>
+  // Small-area assumption: flat 2D plane.
+  //   1 degree of latitude  = KM_PER_DEG km
+  //   1 degree of longitude = KM_PER_DEG * cos(latitude) km
+  const KM_PER_DEG = (2 * Math.PI * 6371) / 360; // ~111.195
+  const COORD_RE = /^\s*(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)\s*$/;
+
+  function parseCoord(text, label) {
+    const m = COORD_RE.exec(text || "");
+    if (!m) throw new Error(`${label}: enter a coordinate like 55.6761, 12.5683`);
+    const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180)
+      throw new Error(`${label}: latitude must be -90 to 90 and longitude -180 to 180`);
+    return [lat, lon];
+  }
+
+  function randomInCircle([lat, lon], radiusKm) {
+    // sqrt keeps the distribution uniform over area (not clustered at the center)
+    const r = radiusKm * Math.sqrt(Math.random());
+    const theta = Math.random() * 2 * Math.PI;
+    const kmPerDegLon = KM_PER_DEG * Math.max(Math.cos((lat * Math.PI) / 180), 1e-6);
+    return [lat + (r * Math.sin(theta)) / KM_PER_DEG, lon + (r * Math.cos(theta)) / kmPerDegLon];
+  }
+
+  function randomInRect(a, b) {
+    const between = (x, y) => Math.min(x, y) + Math.random() * Math.abs(x - y);
+    return [between(a[0], b[0]), between(a[1], b[1])];
+  }
+
+  const $ = (id) => document.getElementById(id);
+
+  $("mode").addEventListener("change", () => {
+    const radius = $("mode").value === "radius";
+    $("radius-fields").hidden = !radius;
+    $("grid-fields").hidden = radius;
+    $("result").hidden = true;
+    $("error").hidden = true;
+  });
+
+  $("form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    $("error").hidden = true;
+    try {
+      let point;
+      if ($("mode").value === "radius") {
+        const center = parseCoord($("center").value, "Starting point");
+        const radiusKm = Number($("radius").value);
+        if (!$("radius").value.trim() || !Number.isFinite(radiusKm) || radiusKm <= 0)
+          throw new Error("Radius: enter a number of kilometers greater than 0");
+        point = randomInCircle(center, radiusKm);
+      } else {
+        point = randomInRect(
+          parseCoord($("ul").value, "Upper-left corner"),
+          parseCoord($("lr").value, "Lower-right corner")
+        );
+      }
+      const lat = Number(point[0].toFixed(6)), lon = Number(point[1].toFixed(6));
+      $("coords").textContent = `${lat}, ${lon}`;
+      $("link").href = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+      $("result").hidden = false;
+    } catch (err) {
+      $("result").hidden = true;
+      $("error").textContent = err.message;
+      $("error").hidden = false;
+    }
+  });
+
+  $("copy").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText($("coords").textContent);
+      $("copy").textContent = "Copied";
+    } catch {
+      $("copy").textContent = "Copy failed";
+    }
+    setTimeout(() => ($("copy").textContent = "Copy coordinates"), 1500);
+  });
+</script>
+</body>
+</html>
