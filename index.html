@@ -69,8 +69,8 @@
     <div id="radius-fields">
       <div class="field">
         <label for="center">Starting point</label>
-        <input id="center" placeholder="55.6761, 12.5683" autocomplete="off">
-        <span class="hint">Right-click a spot in Google Maps and click the coordinates to copy them.</span>
+        <input id="center" placeholder="55.6761, 12.5683 or a Google Maps link" autocomplete="off">
+        <span class="hint">Right-click a spot in Google Maps and click the coordinates to copy them, or paste the full link to a place or dropped pin. Short links (maps.app.goo.gl) don't work: open one and copy the URL from the address bar.</span>
       </div>
       <div class="field">
         <label for="radius">Radius (km)</label>
@@ -81,11 +81,12 @@
     <div id="grid-fields" hidden>
       <div class="field">
         <label for="ul">Upper-left corner</label>
-        <input id="ul" placeholder="55.6900, 12.5400" autocomplete="off">
+        <input id="ul" placeholder="55.6900, 12.5400 or map link" autocomplete="off">
       </div>
       <div class="field">
         <label for="lr">Lower-right corner</label>
-        <input id="lr" placeholder="55.6600, 12.6000" autocomplete="off">
+        <input id="lr" placeholder="55.6600, 12.6000 or map link" autocomplete="off">
+        <span class="hint">Each corner accepts coordinates or a full Google Maps link.</span>
       </div>
     </div>
 
@@ -109,10 +110,36 @@
   const KM_PER_DEG = (2 * Math.PI * 6371) / 360; // ~111.195
   const COORD_RE = /^\s*(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)\s*$/;
 
+  // Patterns for full Google Maps links, most precise first.
+  // !3d..!4d is the pin itself; @lat,lon is only the center of the map view.
+  const N = "(-?\\d+(?:\\.\\d+)?)";
+  const LINK_PATTERNS = [
+    new RegExp(`!3d${N}!4d${N}`),
+    new RegExp(`[?&](?:q|query|ll|center|destination)=(?:loc:)?${N}[,+\\s]+${N}`),
+    new RegExp(`/(?:place|search)/${N}[,+\\s]+${N}`),
+    new RegExp(`@${N},${N}`),
+  ];
+
+  function extractCoord(text, label) {
+    const plain = COORD_RE.exec(text);
+    if (plain) return [parseFloat(plain[1]), parseFloat(plain[2])];
+
+    if (/goo\.gl|maps\.app/i.test(text))
+      throw new Error(`${label}: short links can't be read. Open the link, then copy the full URL from the address bar`);
+    if (/google\.[a-z.]+\/maps|^https?:\/\//i.test(text)) {
+      let url = text;
+      try { url = decodeURIComponent(text); } catch { /* use the raw text */ }
+      for (const re of LINK_PATTERNS) {
+        const m = re.exec(url);
+        if (m) return [parseFloat(m[1]), parseFloat(m[2])];
+      }
+      throw new Error(`${label}: no coordinates found in that link. Try the full URL of a place or dropped pin`);
+    }
+    throw new Error(`${label}: enter coordinates like 55.6761, 12.5683 or paste a Google Maps link`);
+  }
+
   function parseCoord(text, label) {
-    const m = COORD_RE.exec(text || "");
-    if (!m) throw new Error(`${label}: enter a coordinate like 55.6761, 12.5683`);
-    const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
+    const [lat, lon] = extractCoord((text || "").trim(), label);
     if (Math.abs(lat) > 90 || Math.abs(lon) > 180)
       throw new Error(`${label}: latitude must be -90 to 90 and longitude -180 to 180`);
     return [lat, lon];
